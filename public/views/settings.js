@@ -3,6 +3,7 @@ import {
   getConnections, createConnection, updateConnection, deleteConnection,
   setActiveConnection,
   getPromptPresets, updatePromptPreset,
+  getVersion,
 } from '../lib/api.js';
 import { createColorPicker } from '../lib/colorPicker.js';
 import { icon, Plus, Copy, Trash2, AlignLeft, AlignCenter, AlignRight, AlignJustify } from '../lib/icons.js';
@@ -467,6 +468,8 @@ export async function init(State, container) {
             <label class="checkbox-label"><input type="checkbox" id="d-show-duration" /> Show generation time</label>
           </div>
         </div>
+
+        <div class="settings-version" id="d-version">st-alt</div>
 
       </div>
 
@@ -937,6 +940,14 @@ export async function init(State, container) {
       if (window._State?.settings) window._State.settings.chatParaGap = v;
     }, 400);
   });
+
+  // Version footer — fetched once on init
+  getVersion()
+    .then(({ version, name }) => {
+      const v = el('d-version');
+      if (v) v.textContent = `${name ?? 'st-alt'} v${version}`;
+    })
+    .catch(() => {});
 
   let uiFontSizeTimer = null;
   el('d-ui-font-size').addEventListener('input', () => {

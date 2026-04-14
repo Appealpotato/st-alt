@@ -20,6 +20,9 @@ async function request(method, path, body) {
 export const getSettings  = ()       => request('GET',  '/api/settings');
 export const saveSettings = (data)   => request('PUT',  '/api/settings', data);
 
+// App version
+export const getVersion = () => request('GET', '/api/version');
+
 // Connection presets
 export const getConnections   = ()       => request('GET',    '/api/connections');
 export const createConnection = (data)   => request('POST',   '/api/connections', data);

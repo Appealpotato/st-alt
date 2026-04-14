@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 
 import settingsRouter, { migrateIfNeeded } from './routes/settings.js';
@@ -13,6 +14,8 @@ import chatRouter          from './routes/chat.js';
 import { ensureDataFiles, readJSON, dataPath } from './lib/fileStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const PKG = JSON.parse(await fs.readFile(path.join(__dirname, 'package.json'), 'utf8'));
 
 await ensureDataFiles();
 // Run settings migration before serving any requests so all routes see the new schema
@@ -37,6 +40,8 @@ app.use('/api/characters',     charactersRouter);
 app.use('/api/models',         modelsRouter);
 app.use('/api/history',        historyRouter);
 app.use('/api/chat',           chatRouter);
+
+app.get('/api/version', (_req, res) => res.json({ version: PKG.version, name: PKG.name }));
 
 // Catch validation / safePath errors and return their status code
 app.use((err, _req, res, _next) => {
