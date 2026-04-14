@@ -6,6 +6,7 @@ data/
 
 # Claude Code session state
 .claude/
+CLAUDE.md
 
 # Local env
 .env
