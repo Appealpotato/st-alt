@@ -108,16 +108,24 @@ router.post('/import', importUpload.single('file'), async (req, res) => {
       .map(c => { try { return pngText.decode(c.data); } catch { return null; } })
       .filter(Boolean);
 
-    const charaChunk = textChunks.find(c => c.keyword === 'chara');
+    // Prefer v3 (ccv3) when present, fall back to v1/v2 (chara). Match case-insensitively.
+    const charaChunk =
+      textChunks.find(c => c.keyword?.toLowerCase() === 'ccv3') ||
+      textChunks.find(c => c.keyword?.toLowerCase() === 'chara');
     if (!charaChunk) {
-      return res.status(400).json({ error: 'No chara metadata found in this PNG' });
+      return res.status(400).json({ error: 'No character metadata (chara/ccv3) found in this PNG' });
     }
 
     // Decode base64 → JSON
-    const raw = JSON.parse(Buffer.from(charaChunk.text, 'base64').toString('utf-8'));
+    let raw;
+    try {
+      raw = JSON.parse(Buffer.from(charaChunk.text, 'base64').toString('utf-8'));
+    } catch {
+      return res.status(400).json({ error: 'Character metadata is not valid JSON' });
+    }
 
-    // Support v1 (flat) and v2 (nested under .data)
-    const data = (raw.spec === 'chara_card_v2' && raw.data) ? raw.data : raw;
+    // Support v1 (flat) and v2/v3 (nested under .data)
+    const data = ((raw.spec === 'chara_card_v2' || raw.spec === 'chara_card_v3') && raw.data) ? raw.data : raw;
 
     const id = 'char_' + randomUUID().slice(0, 8);
 

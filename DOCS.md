@@ -84,7 +84,6 @@ st-alt/
     ├── app.js                  Global State, panel/tab routing, boot
     ├── views/
     │   ├── chat.js             Chat view (sessions, streaming, message rendering)
-    │   ├── chats.js            Chats tab (session list, per-character filtering)
     │   ├── promptStack.js      Prompt stack view + ST import
     │   ├── characters.js       Character/persona management view
     │   └── settings.js         Connection, generation, and display settings
@@ -562,7 +561,7 @@ Full replacement. Merges over existing. Updates index entry automatically.
 Removes from index and deletes the file.
 
 #### `POST /api/characters/import`
-Import a character from a SillyTavern-format PNG (character data embedded in PNG `tEXt` chunk). Multipart `file` field.
+Import a character from a SillyTavern-format PNG (character data embedded in PNG `tEXt` chunk). Multipart `file` field. Accepts v1 (flat JSON), v2 (`chara_card_v2`, keyword `chara`), and v3 (`chara_card_v3`, keyword `ccv3`) cards; keyword match is case-insensitive and `ccv3` takes precedence when both are present.
 
 **Response:** `201` + full character object. Avatar is saved to `data/avatars/`.
 
@@ -921,7 +920,13 @@ open in the inline editor. The Chats subtab shows all sessions for that characte
 timestamps and last-message previews. Both subtabs can be popped out into floating panels via
 the Maximize button in the inline editor header.
 
-The Chats subtab toolbar has: "+ New Chat", "Import" (JSONL), "Export All" (zip), and "Select" (bulk delete mode). In select mode, checkboxes appear on each chat item and a sticky bar at the bottom shows the count and a "Delete (N)" button with inline confirmation.
+The Chats subtab toolbar is a right-aligned row of Lucide icon buttons: **MessageSquarePlus** (new chat), **Upload** (import JSONL), **Package** (export all as zip), and **ListChecks** (toggle select mode). The select button gets an accent highlight while active.
+
+Select mode is click-to-select with no checkboxes: clicking anywhere on a row toggles selection (accent left-border + tinted background). Per-row hover actions (rename / export / delete) are hidden while in select mode via `.char-chat-list--selecting .char-chat-item-actions { display: none }`. A sticky bulk bar at the bottom shows `N selected` and a red **Trash2** icon; clicking it runs `confirmInline`, which swaps the icon in-place to `[✓] [✗]` (checkmark left of X). Exit select mode by clicking the toggle again; selection clears on exit.
+
+Per-row actions (rename / export / delete) live in a fixed-width (72px `min-width`) hover-revealed bar to prevent any layout shift when delete → `[✓] [✗]` confirm swap fires; rename + export siblings `display: none` during the pending confirm so the ✓/✗ fill their slot. Inline rename swaps the title span for a borderless transparent input with an underline `box-shadow` cue — zero card height change.
+
+When a new session is created anywhere (new chat button, branch from message), `chat.js` dispatches a `sessionscreated` CustomEvent; `characters.js` listens for it and refreshes the chats subtab if the new session belongs to the character currently open in the inline editor.
 
 Characters tab state is fully persisted across refreshes via `localStorage`:
 - `charTypeFilter` — active type filter (`character` or `persona`)

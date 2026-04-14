@@ -50,13 +50,23 @@ function tokenCount(text) {
 async function importCharacterPNG(file) {
   const fd = new FormData();
   fd.append('file', file);
-  const res = await fetch('/api/characters/import', { method: 'POST', body: fd });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    console.error(`Import failed for "${file.name}":`, err.error || res.statusText);
+  try {
+    const res = await fetch('/api/characters/import', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = err.error || res.statusText || 'Import failed';
+      console.error(`Import failed for "${file.name}":`, msg);
+      showToast(`Failed to import ${file.name}: ${msg}`, 'error');
+      return null;
+    }
+    const char = await res.json();
+    showToast(`Imported "${char.name}"`, 'success');
+    return char;
+  } catch (err) {
+    console.error(`Import failed for "${file.name}":`, err);
+    showToast(`Failed to import ${file.name}: ${err.message}`, 'error');
     return null;
   }
-  return res.json();
 }
 
 // ── Module state ──────────────────────────────────────────────────────────────
