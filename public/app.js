@@ -8,6 +8,7 @@ import { getSettings, getPrompts, getCharacter, saveSettings, getCharacters, sea
 import { createSearch }          from './lib/search.js';
 import { initCommandPalette }    from './lib/commandPalette.js';
 import { initPanelResize, applyPanelWidth, getSavedPanelWidth } from './lib/panelResize.js';
+import { stripFormatting } from './lib/textPreview.js';
 
 const AVATAR_SHAPES = {
   circle:   { radius: '50%', ratio: '1 / 1' },
@@ -233,7 +234,7 @@ function initPalette() {
       .map(c => ({
         id: c.id,
         label: c.name,
-        sublabel: c.creatorNotes?.slice(0, 80),
+        sublabel: stripFormatting(c.creatorNotes, 80),
         icon: c.avatar ?? null,
         category: 'Characters',
         action: () => CharactersView.clickToChat(c, State),
@@ -246,7 +247,7 @@ function initPalette() {
       .map(c => ({
         id: c.id,
         label: c.name,
-        sublabel: c.creatorNotes?.slice(0, 80),
+        sublabel: stripFormatting(c.creatorNotes, 80),
         category: 'Personas',
         action: () => {
           showPanel('characters');
@@ -349,7 +350,7 @@ function initPalette() {
         const { results } = await searchMessages(term);
         return results.map(r => ({
           id: `msg-${r.sessionId}-${r.messageId}`,
-          label: r.preview,
+          label: stripFormatting(r.preview, 120),
           sublabel: r.sessionTitle + (r.characterName ? ` (${r.characterName})` : ''),
           role: r.role,
           category: 'Messages',

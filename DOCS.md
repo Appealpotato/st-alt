@@ -869,7 +869,7 @@ Import from the Prompts view using the **Import ST Preset** button. Accepts `.js
 | `dialogueExamples` | Collapsed into `type: "character"` sentinel |
 | `worldInfoBefore` | Imported as **disabled** system entry (if content present) |
 | `worldInfoAfter` | Imported as **disabled** system entry (if content present) |
-| `personaDescription` | Imported as system entry (if content present) |
+| `personaDescription` | Mapped to `type: "persona"` sentinel (expands to active persona at assembly time) |
 | Any custom prompt | Imported as `type: "system"` entry |
 
 All four character markers collapse into a **single** character sentinel placed at the first occurrence. The character card content comes from the active character card, not from the preset.
@@ -890,6 +890,8 @@ On import:
 2. The imported entries are created (new IDs assigned)
 3. The character and chatHistory sentinels are preserved (or added if missing)
 4. The prompts view reloads from the server
+
+**Multi-character `prompt_order`:** ST presets carry one `prompt_order` entry per character (character_id 100000 is the generic default, 100001+ are per-character overrides). The importer **merges** all orders — an identifier referenced by any character is included. Position follows the first order the identifier appears in; `enabled` is OR'd across orders. This prevents prompts that only appear in a per-character override (commonly `personaDescription`) from being silently dropped.
 
 **If the preset has no `chatHistory` identifier:** A chatHistory sentinel is appended at the end.
 **If the preset has no character identifiers:** A character sentinel is prepended at the top.
@@ -1106,6 +1108,22 @@ User sends message
   └─ Send button becomes "Stop" during streaming
      Clicking Stop calls abort(), preserves partial content client- and server-side
 ```
+
+### Message Rendering Pipeline (`formatMessageContent` in `public/views/chat.js`)
+
+Messages are rendered from raw text through this ordered pipeline (full re-parse per streaming token):
+
+1. **Normalise line endings** (`\r\n` → `\n`).
+2. **Extract `<think>`/`<thinking>` blocks** → rendered separately as a collapsible `<details class="thinking-block">`.
+3. **Extract fenced code blocks** (```` ```lang\n…\n``` ````) → stored in an array, replaced with a private-use-area placeholder. An unclosed trailing ` ``` ` is also extracted so code streams render in real time.
+4. **Extract inline code** (`` `foo` ``) → placeholder.
+5. **Apply markdown + dialogue coloring** to the raw text (with code placeholders in place of code segments, so code content is never touched). Markdown: `***`, `**`, `*`, `~~`. Dialogue: `"…"` and `"…"`; quotes may span single `\n` boundaries to match prior multi-line behavior.
+6. **Paragraph split** on blank lines → wrap each block in `<p>…</p>`; single `\n` inside a paragraph becomes `<br>`.
+7. **Sanitize with DOMPurify** (`public/lib/purify.js`, v3.2.4 ESM). Allowed tags: `b i em strong u s del small sub sup br hr p div span ul ol li blockquote details summary a img`. Allowed attrs: `class style href title src alt open`. URI scheme allowlist: `http(s)`, `mailto`, `data:image/`. Everything else is stripped. This is the XSS boundary.
+8. **Reinsert code placeholders** as `<pre><code class="language-X">…</code></pre>` (fenced) or `<code>…</code>` (inline). Code contents are HTML-escaped here and never pass through markdown/dialogue regexes or DOMPurify.
+9. **Prepend `<think>` reasoning block** if content was extracted in step 2 (same pipeline, no paragraph split).
+
+Security posture: DOMPurify handles all XSS vectors (event handlers, `javascript:` URIs, SVG/MathML). Known minor edge case: if a user pastes raw HTML whose attribute value contains a paired `"` or `*`, the markdown/dialogue regex may corrupt that attribute before sanitization, causing DOMPurify to drop the tag. No security impact.
 
 ---
 

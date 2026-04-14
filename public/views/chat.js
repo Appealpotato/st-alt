@@ -8,6 +8,20 @@ import { streamCompletion } from '../lib/stream.js';
 import { icon, Pencil, Trash2, GitBranch, RefreshCw,
          ChevronLeft, ChevronRight, LayoutGrid, AlignLeft, Plus, Check, X, Play } from '../lib/icons.js';
 import { showToast } from '../lib/toast.js';
+import DOMPurify from '../lib/purify.js';
+
+const PURIFY_CONFIG = {
+  ALLOWED_TAGS: [
+    'b', 'i', 'em', 'strong', 'u', 's', 'del', 'small', 'sub', 'sup',
+    'br', 'hr', 'p', 'div', 'span',
+    'ul', 'ol', 'li', 'blockquote',
+    'details', 'summary',
+    'a', 'img',
+  ],
+  ALLOWED_ATTR: ['class', 'style', 'href', 'title', 'src', 'alt', 'open'],
+  ALLOW_DATA_ATTR: false,
+  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|data:image\/)/i,
+};
 
 // ── Markdown / dialogue formatting ───────────────────────────────────────────
 
@@ -19,50 +33,104 @@ import { showToast } from '../lib/toast.js';
  * each time). Fine in practice — simple regexes on short strings. If streaming
  * jank appears, switch onToken back to textContent and only call this on done.
  */
-function applyMarkdown(html) {
-  html = html.replace(/\*\*\*(.+?)\*\*\*/gs, '<strong><em>$1</em></strong>');
-  html = html.replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/gs, '<em>$1</em>');
-  html = html.replace(/~~(.+?)~~/gs, '<del>$1</del>');
-  return html;
+function applyMarkdown(text) {
+  text = text.replace(/\*\*\*(.+?)\*\*\*/gs, '<strong><em>$1</em></strong>');
+  text = text.replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>');
+  text = text.replace(/\*(.+?)\*/gs, '<em>$1</em>');
+  text = text.replace(/~~(.+?)~~/gs, '<del>$1</del>');
+  return text;
 }
 
-function applyDialogueColor(html) {
-  html = html.replace(/&quot;([^]*?)&quot;/g, '<span class="dialogue">&quot;$1&quot;</span>');
-  html = html.replace(/\u201C([^\u201D]*?)\u201D/g, '<span class="dialogue">\u201C$1\u201D</span>');
-  return html;
+// Dialogue coloring. Runs on raw text (before paragraph wrapping) so that a
+// quoted span broken only by single \n still matches — preserves prior behavior
+// for multi-line dialogue. The `"` → literal form is fine here because this
+// runs before any HTML attribute values exist; DOMPurify cleans up in the
+// unlikely case a user's raw-HTML attribute value gets mangled by the regex.
+function applyDialogueColor(text) {
+  text = text.replace(/"([^"\n]*(?:\n[^"\n]*)*)"/g, '<span class="dialogue">"$1"</span>');
+  text = text.replace(/\u201C([^\u201D]*?)\u201D/g, '<span class="dialogue">\u201C$1\u201D</span>');
+  return text;
 }
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Private-use-area placeholder markers for extracted code segments — opaque
+// characters that survive DOMPurify and don't collide with normal content.
+const CODE_PLACEHOLDER = (i) => `\uE000CODE${i}\uE001`;
+const INLINE_PLACEHOLDER = (i) => `\uE002INLN${i}\uE003`;
 
 function formatMessageContent(text) {
-  // 1. Normalise line endings then escape HTML entities
-  let html = text
-    .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  // 1. Normalise line endings.
+  let src = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // 2. Extract <think>/<thinking> blocks (tags are now &lt;think&gt; after escaping)
+  // 2. Extract <think>/<thinking> from raw text.
   let thinkingContent = '';
-  html = html.replace(
-    /&lt;(?:think|thinking)&gt;([\s\S]*?)&lt;\/(?:think|thinking)&gt;/gi,
-    (_, content) => { thinkingContent += content; return ''; }
+  src = src.replace(
+    /<(?:think|thinking)>([\s\S]*?)<\/(?:think|thinking)>/gi,
+    (_, c) => { thinkingContent += c; return ''; }
   );
 
-  // 3. Build collapsible reasoning block if content was found
-  let prefix = '';
-  if (thinkingContent.trim()) {
-    const inner = applyMarkdown(thinkingContent.trim()).replace(/\n/g, '<br>');
-    prefix = `<details class="thinking-block"><summary class="thinking-summary">Reasoning</summary><div class="thinking-content">${inner}</div></details>`;
+  // 3. Extract fenced code blocks — both closed and an unclosed trailing
+  //    fence (streaming case), in that order.
+  const codeBlocks = [];
+  src = src.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const i = codeBlocks.push({ lang, code }) - 1;
+    return CODE_PLACEHOLDER(i);
+  });
+  const trailingFence = src.match(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*)$/);
+  if (trailingFence) {
+    const i = codeBlocks.push({ lang: trailingFence[1], code: trailingFence[2] }) - 1;
+    src = src.slice(0, trailingFence.index) + CODE_PLACEHOLDER(i);
   }
 
-  // 4. Apply markdown + dialogue coloring to main content
-  html = applyDialogueColor(applyMarkdown(html.trim()));
-  // Split on blank lines → <p> paragraphs; single \n → <br> within each
-  html = html.split(/\n\n+/)
+  // 4. Extract inline code.
+  const inlineCodes = [];
+  src = src.replace(/`([^`\n]+)`/g, (_, code) => {
+    const i = inlineCodes.push(code) - 1;
+    return INLINE_PLACEHOLDER(i);
+  });
+
+  // 5. Apply markdown + dialogue regexes on raw text (with placeholders in
+  //    place of code segments, so code content is untouched). Placeholder
+  //    chars contain no *, `, or " so regexes skip over them.
+  src = applyDialogueColor(applyMarkdown(src));
+
+  // 6. Paragraph split + \n → <br>, wrap each block in <p>.
+  let html = src.trim().split(/\n\n+/)
     .filter(p => p.trim())
     .map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`)
     .join('');
+
+  // 7. Sanitize: DOMPurify enforces the tag/attr allowlist. Our markdown +
+  //    dialogue tags survive; any malformed user HTML (e.g. an <a> whose title
+  //    attr got clipped by the dialogue regex) is dropped. Critical for XSS.
+  html = DOMPurify.sanitize(html, PURIFY_CONFIG);
+
+  // 8. Reinsert code placeholders as styled code elements. Contents HTML-
+  //    escaped here; they never touched sanitize or markdown regexes.
+  html = html.replace(/\uE000CODE(\d+)\uE001/g, (_, i) => {
+    const { lang, code } = codeBlocks[+i];
+    const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : '';
+    // Code blocks are block-level: close the surrounding <p> so the browser
+    // doesn't auto-break around the <pre>.
+    return `</p><pre><code${langAttr}>${escapeHtml(code)}</code></pre><p>`;
+  });
+  html = html.replace(/\uE002INLN(\d+)\uE003/g, (_, i) => `<code>${escapeHtml(inlineCodes[+i])}</code>`);
+  html = html.replace(/<p>\s*<\/p>/g, ''); // empty <p>s from the unwrap above
+
+  // 9. Prepend the reasoning block if <think> content was found. Same
+  //    pipeline minus paragraph-splitting (think blocks are typically a
+  //    single flow of prose with \n line breaks).
+  let prefix = '';
+  if (thinkingContent.trim()) {
+    const inner = DOMPurify.sanitize(
+      applyDialogueColor(applyMarkdown(thinkingContent.trim())).replace(/\n/g, '<br>'),
+      PURIFY_CONFIG
+    );
+    prefix = `<details class="thinking-block"><summary class="thinking-summary">Reasoning</summary><div class="thinking-content">${inner}</div></details>`;
+  }
 
   return prefix + html;
 }

@@ -7,11 +7,12 @@ import { selectSession, newSession, renderMessages } from './chat.js';
 import { createAccordion }    from '../lib/accordion.js';
 import { createFloatingPanel } from '../lib/floatingPanel.js';
 import { createSearch }        from '../lib/search.js';
-import { icon, Pencil, Trash2, ChevronLeft, LayoutGrid, List, Maximize2, Minimize2, Download, X, MessageSquarePlus, Upload, Package, ListChecks } from '../lib/icons.js';
+import { icon, Pencil, Trash2, ChevronLeft, LayoutGrid, List, Maximize2, Minimize2, Download, X, MessageSquarePlus, Upload, Package, ListChecks, Plus } from '../lib/icons.js';
 import { confirmInline } from '../lib/confirmInline.js';
 import { countTokens, pickEncoder, setCachedTokens } from '../lib/tokenizer.js';
 import { showToast } from '../lib/toast.js';
 import { openCropModal } from '../lib/cropModal.js';
+import { stripFormatting } from '../lib/textPreview.js';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -103,14 +104,16 @@ export async function init(State, container) {
   const header = document.createElement('div');
   header.id = 'char-browser-header';
   header.innerHTML = `
-    <button id="char-new" class="btn-ghost" title="New character">+</button>
-    <button id="char-import" class="btn-ghost" title="Import from PNG">Import</button>
+    <button id="char-new" class="btn-ghost char-view-btn" title="New character"></button>
+    <button id="char-import" class="btn-ghost char-view-btn" title="Import character"></button>
     <input id="char-import-input" type="file" accept=".png" multiple hidden>
     <span style="flex:1"></span>
     <button id="char-view-grid" class="char-view-btn btn-ghost" title="Grid view"></button>
     <button id="char-view-list" class="char-view-btn btn-ghost" title="List view"></button>
     <button id="char-gallery-open" class="char-view-btn btn-ghost" title="Expand gallery"></button>
   `;
+  header.querySelector('#char-new').appendChild(icon(Plus, 16));
+  header.querySelector('#char-import').appendChild(icon(Upload, 16));
   header.querySelector('#char-view-grid').appendChild(icon(LayoutGrid, 16));
   header.querySelector('#char-view-list').appendChild(icon(List, 16));
   header.querySelector('#char-gallery-open').appendChild(icon(Maximize2, 16));
@@ -452,7 +455,7 @@ function buildListRow(meta) {
   info.className = 'char-row-info';
   info.innerHTML = `
     <div class="char-row-name">${esc(meta.name)}</div>
-    <div class="char-row-desc">${esc((meta.creatorNotes ?? '').slice(0, 80))}</div>
+    <div class="char-row-desc">${esc(stripFormatting(meta.creatorNotes, 80))}</div>
   `;
 
   const editBtn = document.createElement('button');
@@ -1009,7 +1012,7 @@ function buildCharChatItem(s, char, State, container, selectCtx, updateBulkCount
   if (s.lastMessagePreview) {
     const preview = document.createElement('div');
     preview.className = 'char-chat-item-preview';
-    preview.textContent = s.lastMessagePreview;
+    preview.textContent = stripFormatting(s.lastMessagePreview, 140);
     item.appendChild(preview);
   }
 
@@ -1211,7 +1214,7 @@ export function openGallery(State) {
     container.appendChild(toolbar);
 
     search.register('characters', () => (State.characters ?? []).map(c => ({
-      id: c.id, label: c.name, sublabel: c.creatorNotes?.slice(0, 80),
+      id: c.id, label: c.name, sublabel: stripFormatting(c.creatorNotes, 80),
     })));
 
     const gridWrap = document.createElement('div');

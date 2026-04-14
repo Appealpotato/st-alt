@@ -1066,6 +1066,60 @@ body.chat-align-justify .message-body { text-align: justify; }
   margin-top: var(--para-gap, 0.75em);
 }
 
+/* ── Code blocks and inline code ─────────────────────────────────────────── */
+.message-body pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.85rem;
+  margin: 0.6em 0;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+.message-body pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  white-space: pre;
+}
+.message-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  white-space: break-spaces;
+}
+
+/* ── User-embedded HTML inside messages ──────────────────────────────────── */
+.message-body img { max-width: 100%; height: auto; border-radius: var(--radius); }
+.message-body details {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.7rem;
+  margin: 0.5em 0;
+}
+.message-body details summary { cursor: pointer; font-weight: 600; }
+.message-body blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 0.2em 0 0.2em 0.8em;
+  margin: 0.6em 0;
+  color: var(--text-sub);
+}
+.message-body ul, .message-body ol { padding-left: 1.4em; margin: 0.4em 0; }
+.message-body hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
+.message-body a { color: var(--accent); }
+
 .message--user {
   background: var(--user-bg);
   color: var(--text);
