@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# User data — chats, characters, settings, avatars
+data/
+
+# Claude Code session state
+.claude/
+
+# Local env
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

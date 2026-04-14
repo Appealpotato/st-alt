@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>st-alt</title>
+  <link rel="preconnect" href="https://fonts.bunny.net">
+  <link rel="stylesheet" href="https://fonts.bunny.net/css2?family=Lora&family=Libre+Baskerville&family=Crimson+Text&family=EB+Garamond&family=Source+Serif+4&family=Inter&family=IBM+Plex+Sans&family=Source+Sans+3&display=swap" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="lib/cropper.min.css" />
+  <script src="lib/cropper.min.js"></script>
+</head>
+<body>
+  <nav id="main-nav">
+    <span id="app-title">st-alt</span>
+    <div id="nav-panel-buttons">
+      <button data-panel="characters" title="Characters"><i data-lucide="users"></i></button>
+      <button data-panel="prompts" title="Prompts"><i data-lucide="layers"></i></button>
+      <button data-panel="settings" title="Settings"><i data-lucide="settings-2"></i></button>
+    </div>
+  </nav>
+
+  <div id="app-layout">
+    <div id="chat-area"></div>
+    <div class="panel-backdrop"></div>
+    <div id="panel-wrapper">
+      <div class="panel-resize-handle"></div>
+      <aside id="right-panel">
+      <div id="panel-tabs">
+        <button class="panel-tab panel-tab--active" data-tab="characters">Characters</button>
+        <button class="panel-tab" data-tab="prompts">Prompts</button>
+        <button class="panel-tab" data-tab="settings">Settings</button>
+        <button id="panel-close" class="btn-ghost"><i data-lucide="x"></i></button>
+      </div>
+      <div id="tab-characters" class="tab-container tab-container--active"></div>
+      <div id="tab-prompts"    class="tab-container"></div>
+      <div id="tab-settings"   class="tab-container"></div>
+    </aside>
+    </div>
+  </div>
+
+  <script src="/lib/sortable.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
