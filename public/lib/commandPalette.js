@@ -169,9 +169,17 @@ export function initCommandPalette(State, search, { asyncSearch } = {}) {
     if (!_open) return;
     _open = false;
     overlay.classList.remove('cp-overlay--visible');
-    overlay.addEventListener('transitionend', () => {
+    // Wait for transition then hide; fallback timeout guards against transitionend not firing
+    // (mobile, animations disabled, transition interrupted, etc.).
+    // Filter bubbled child transitionends and bail if the user reopened in the meantime —
+    // .cp-item has its own background transition which would otherwise trigger this.
+    const hide = (e) => {
+      if (e && e.target !== overlay) return;
+      if (_open) return;
       overlay.classList.add('cp-overlay--hidden');
-    }, { once: true });
+    };
+    overlay.addEventListener('transitionend', hide, { once: true });
+    setTimeout(() => hide(null), 150);
     input.blur();
   }
 

@@ -37,7 +37,7 @@ const SCALAR_FIELDS = [
   'chatDisplayMode', 'dialogueColor', 'chatMaxWidth', 'chatAlign',
   'showMsgModel', 'showMsgTokens', 'showMsgDuration', 'showMsgDividers',
   'chatFont', 'uiFont', 'chatFontSize', 'uiFontSize', 'chatLineHeight',
-  'deleteMode',
+  'deleteMode', 'animationsMode', 'alwaysShowMsgActions',
 ];
 
 const SETTING_DEFAULTS = {
@@ -57,6 +57,8 @@ const SETTING_DEFAULTS = {
   uiFontSize: 13,
   chatLineHeight: 1.6,
   deleteMode: 'single',
+  animationsMode: 'animated',
+  alwaysShowMsgActions: false,
   connectionPresets: [],
   promptPresets: [],
   activeConnectionPresetId: null,

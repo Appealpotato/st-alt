@@ -8,7 +8,7 @@ import { createColorPicker } from '../lib/colorPicker.js';
 import { icon, Plus, Copy, Trash2, AlignLeft, AlignCenter, AlignRight, AlignJustify } from '../lib/icons.js';
 import { confirmInline } from '../lib/confirmInline.js';
 import { showToast } from '../lib/toast.js';
-import { applyDisplayMode } from './chat.js';
+import { applyDisplayMode, applyAnimationsMode, applyAlwaysShowActions } from './chat.js';
 
 const el = id => document.getElementById(id);
 
@@ -232,6 +232,11 @@ function updateDeleteButtons(mode) {
   const c = el('d-delete-chain');  if (c) c.className = mode === 'chain'  ? 'btn-primary' : 'btn-secondary';
 }
 
+function updateAnimationsButtons(mode) {
+  const a = el('d-anim-animated'); if (a) a.className = mode === 'animated' ? 'btn-primary' : 'btn-secondary';
+  const i = el('d-anim-instant');  if (i) i.className = mode === 'instant'  ? 'btn-primary' : 'btn-secondary';
+}
+
 function updateDisplayModeButtons(mode) {
   el('d-mode-bubble')?.classList.toggle('btn-primary', mode === 'bubble');
   el('d-mode-bubble')?.classList.toggle('btn-secondary', mode !== 'bubble');
@@ -381,6 +386,14 @@ export async function init(State, container) {
             <div class="row-inline">
               <button id="d-delete-single" class="btn-secondary">Single message</button>
               <button id="d-delete-chain" class="btn-secondary">Message + following</button>
+            </div>
+          </div>
+          <div class="field-group" style="margin-top:0.75rem">
+            <label>Animations</label>
+            <div class="row-inline">
+              <button id="d-anim-animated" class="btn-secondary">Animated</button>
+              <button id="d-anim-instant" class="btn-secondary">Instant</button>
+              <label class="checkbox-label" style="margin-left:auto"><input type="checkbox" id="d-always-actions" /> Always show message actions</label>
             </div>
           </div>
         </div>
@@ -701,6 +714,36 @@ export async function init(State, container) {
     if (_settings) _settings.deleteMode = 'chain';
     if (window._State?.settings) window._State.settings.deleteMode = 'chain';
     updateDeleteButtons('chain');
+  });
+
+  // Animations toggle
+  const initialAnim = _settings?.animationsMode ?? 'animated';
+  applyAnimationsMode(initialAnim);
+  updateAnimationsButtons(initialAnim);
+  el('d-anim-animated').addEventListener('click', async () => {
+    applyAnimationsMode('animated');
+    updateAnimationsButtons('animated');
+    await saveSettings({ animationsMode: 'animated' });
+    if (_settings) _settings.animationsMode = 'animated';
+    if (window._State?.settings) window._State.settings.animationsMode = 'animated';
+  });
+  el('d-anim-instant').addEventListener('click', async () => {
+    applyAnimationsMode('instant');
+    updateAnimationsButtons('instant');
+    await saveSettings({ animationsMode: 'instant' });
+    if (_settings) _settings.animationsMode = 'instant';
+    if (window._State?.settings) window._State.settings.animationsMode = 'instant';
+  });
+
+  // Always show message actions
+  el('d-always-actions').checked = _settings?.alwaysShowMsgActions ?? false;
+  applyAlwaysShowActions(el('d-always-actions').checked);
+  el('d-always-actions').addEventListener('change', async () => {
+    const on = el('d-always-actions').checked;
+    applyAlwaysShowActions(on);
+    await saveSettings({ alwaysShowMsgActions: on });
+    if (_settings) _settings.alwaysShowMsgActions = on;
+    if (window._State?.settings) window._State.settings.alwaysShowMsgActions = on;
   });
 
   el('d-dividers').checked = _settings?.showMsgDividers ?? false;

@@ -339,6 +339,8 @@ async function loadSessions(State, prefetchedSettings = null) {
   State.activeCharacterId = settings.activeCharacterId ?? null;
   State.settings = { ...(State.settings ?? {}), ...settings };
   applyDisplayMode(State.settings.chatDisplayMode ?? 'bubble');
+  applyAnimationsMode(State.settings.animationsMode ?? 'animated');
+  applyAlwaysShowActions(State.settings.alwaysShowMsgActions ?? false);
 
   if (!State.activeSessionId && sessions.length > 0) {
     const lastId = localStorage.getItem('lastSessionId');
@@ -493,6 +495,14 @@ async function reconnectToStream(sessionId, State) {
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────
+
+export function applyAnimationsMode(mode) {
+  document.body.classList.toggle('no-animations', mode === 'instant');
+}
+
+export function applyAlwaysShowActions(on) {
+  document.body.classList.toggle('always-show-actions', !!on);
+}
 
 export function applyDisplayMode(mode) {
   const msgs = el('chat-messages');
@@ -1222,8 +1232,8 @@ async function sendMessage(State) {
   // Persist + show user message
   const userMsg = { role: 'user', content: text };
   const msgIdx = State.chatHistory.length;
-  appendMessageEl('user', text, null, false, null, State);
   State.chatHistory.push(userMsg);
+  appendMessageEl('user', text, null, false, msgIdx, State);
   await appendMessage(State.activeSessionId, userMsg);
 
   await streamResponse(State);

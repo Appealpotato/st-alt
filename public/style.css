@@ -1084,8 +1084,10 @@ body.chat-align-justify .message-body { text-align: justify; }
   padding: 0;
   font-size: inherit;
   color: inherit;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
+.message, .message-body, .message-body pre { min-width: 0; max-width: 100%; }
 .message-body code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
@@ -1268,6 +1270,19 @@ body.chat-align-justify .message-body { text-align: justify; }
   background: var(--bg3);
 }
 
+body.always-show-actions .message-actions {
+  visibility: visible;
+}
+
+/* ── Global animation kill switch (Display → Animations: Instant) ────────── */
+body.no-animations *,
+body.no-animations *::before,
+body.no-animations *::after {
+  transition: none !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}
+
 /* ── Inline message editing ────────────────────────────────────────────────── */
 .message-edit-input {
   width: 100%;
@@ -1366,6 +1381,7 @@ details[open] .thinking-summary::before {
   color: var(--text-dim);
   border-top: 1px solid var(--border);
   white-space: pre-wrap;
+  word-break: break-word;
   max-height: 300px;
   overflow-y: auto;
 }
@@ -1381,10 +1397,16 @@ details[open] .thinking-summary::before {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  padding: 0.65rem 1.2rem 0.85rem;
-  border-top: 1px solid var(--border);
-  background: var(--bg2);
-  width: 100%;
+  padding: 0.65rem 0.9rem 0.75rem;
+  margin: 0 auto 0.75rem;
+  width: calc(100% - 1.5rem);
+  max-width: var(--chat-max-width);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  background: rgba(24, 24, 27, 0.55);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   box-sizing: border-box;
 }
 
@@ -2376,7 +2398,7 @@ body.chat-dividers #chat-messages .message-row + .message-row {
 @media (max-width: 600px) {
   #chat-messages { max-width: 100% !important; padding: 0.6rem 0.5rem; }
   input, textarea, select { font-size: 16px; }
-  #chat-input-area { max-width: 100% !important; padding: 0.5rem; }
+  #chat-input-area { max-width: 100% !important; padding: 0.5rem; margin: 0 0 0.4rem; width: calc(100% - 0.6rem); border-radius: 10px; }
   #app-layout {
     position: fixed;
     top: var(--nav-h); left: 0; right: 0;

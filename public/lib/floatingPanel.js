@@ -89,10 +89,15 @@ export function createFloatingPanel({ width = '640px', title = '', onClose } = {
     _open = false;
     overlay.classList.remove('fp-overlay--visible');
     _removeEsc();
-    // Wait for transition then hide; fallback timeout guards against transitionend not firing (mobile)
-    const hide = () => overlay.classList.add('fp-overlay--hidden');
+    // Wait for transition then hide; fallback timeout guards against transitionend not firing (mobile).
+    // Filter bubbled child transitionends and bail if the user reopened in the meantime.
+    const hide = (e) => {
+      if (e && e.target !== overlay) return;
+      if (_open) return;
+      overlay.classList.add('fp-overlay--hidden');
+    };
     overlay.addEventListener('transitionend', hide, { once: true });
-    setTimeout(hide, 150);
+    setTimeout(() => hide(null), 150);
     onClose?.();
   }
 
