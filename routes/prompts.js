@@ -6,13 +6,6 @@ import { randomUUID } from 'crypto';
 const router = Router();
 const SETTINGS_FILE = dataPath('settings.json');
 
-// Read-only helper for GET
-async function readActiveStack() {
-  const settings = await readJSON(SETTINGS_FILE);
-  const preset = settings.promptPresets?.find(p => p.id === settings.activePromptPresetId);
-  return { settings, preset, stack: preset?.stack || [] };
-}
-
 // Locked read-modify-write: fn(stack, settings) → newStack
 async function withActiveStack(fn) {
   let result;
@@ -31,21 +24,20 @@ async function withActiveStack(fn) {
 // GET /api/prompts — return active preset's stack; auto-add chatHistory sentinel if missing
 router.get('/', async (_req, res) => {
   try {
-    const { settings, stack } = await readActiveStack();
-    let changed = false;
-    if (!stack.some(e => e.type === 'chatHistory')) {
-      stack.push({
-        id: 'entry_chathistory',
-        type: 'chatHistory',
-        label: 'Chat History',
-        content: null,
-        enabled: true,
-        role: null,
-        injection_depth: 0,
-      });
-      changed = true;
-    }
-    if (changed) await saveStack(settings, stack);
+    const stack = await withActiveStack((stack) => {
+      if (!stack.some(e => e.type === 'chatHistory')) {
+        stack.push({
+          id: 'entry_chathistory',
+          type: 'chatHistory',
+          label: 'Chat History',
+          content: null,
+          enabled: true,
+          role: null,
+          injection_depth: 0,
+        });
+      }
+      return { newStack: stack, value: stack };
+    });
     res.json({ entries: stack });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
@@ -67,7 +59,7 @@ router.put('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const b = req.body;
-    requireEnum(b, 'type', ['system', 'character', 'chatHistory', 'user', 'assistant'], { optional: true });
+    requireEnum(b, 'type', ['system', 'character', 'chatHistory', 'persona', 'user', 'assistant'], { optional: true });
     requireEnum(b, 'role', ['system', 'user', 'assistant', null], { optional: true });
     requireString(b, 'label', { optional: true, maxLen: 200 });
     requireString(b, 'content', { optional: true, maxLen: 100000 });

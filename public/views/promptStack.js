@@ -553,7 +553,11 @@ export function openPromptStackPanel(State) {
  * ST format:
  *   prompts[]        — custom prompt definitions (identifier, name, content, enable,
  *                      role, injection_position, injection_depth)
- *   prompt_order[0].order — [{identifier, enabled}] defining stack order
+ *   prompt_order[]   — one entry per character (character_id 100000 is the generic
+ *                      default, 100001+ are per-character overrides). Each has
+ *                      .order = [{identifier, enabled}] defining the stack order for
+ *                      that character. We merge ALL orders so prompts referenced by
+ *                      any character are imported.
  *
  * Built-in identifiers and how they map:
  *   chatHistory              → type:'chatHistory' sentinel (marks injection point)
@@ -561,9 +565,10 @@ export function openPromptStackPanel(State) {
  *   charPersonality,
  *   scenario,
  *   dialogueExamples         → collapse into one type:'character' sentinel
+ *   personaDescription       → type:'persona' sentinel (expands to active persona at
+ *                              assembly time)
  *   worldInfoBefore,
  *   worldInfoAfter           → imported as disabled system entries if they have content
- *   personaDescription       → imported as system entry if it has content
  *
  * injection_depth > 0 (Authors Note, etc.):
  *   Preserved on the entry. The assembler weaves these into the chat history block.
@@ -580,14 +585,29 @@ function importSTPreset(data) {
     if (key) promptsByIdentifier[key] = p;
   }
 
-  const orderList = data.prompt_order?.[0]?.order ?? [];
-  const orderedIds = orderList.length > 0
-    ? orderList.map(o => ({ id: o.identifier, enabled: o.enabled ?? true }))
+  // Merge every prompt_order entry's `.order` into a single list. First-seen
+  // position wins (preserves the default character's ordering); enabled flag
+  // is OR'd across all orders (if any character uses it enabled, we keep it on).
+  const merged = new Map(); // identifier → { id, enabled }
+  for (const po of (data.prompt_order ?? [])) {
+    for (const o of (po.order ?? [])) {
+      if (!o?.identifier) continue;
+      const existing = merged.get(o.identifier);
+      if (existing) {
+        existing.enabled = existing.enabled || (o.enabled ?? true);
+      } else {
+        merged.set(o.identifier, { id: o.identifier, enabled: o.enabled ?? true });
+      }
+    }
+  }
+  const orderedIds = merged.size > 0
+    ? Array.from(merged.values())
     : (data.prompts ?? []).map(p => ({ id: p.identifier ?? p.name, enabled: p.enable ?? true }));
 
   const entries = [];
   let charSentinelAdded = false;
   let chatHistorySentinelAdded = false;
+  let personaSentinelAdded = false;
 
   for (const { id, enabled } of orderedIds) {
     if (id === 'chatHistory') {
@@ -597,6 +617,17 @@ function importSTPreset(data) {
           content: null, enabled: true, role: null, injection_depth: 0,
         });
         chatHistorySentinelAdded = true;
+      }
+      continue;
+    }
+
+    if (id === 'personaDescription') {
+      if (!personaSentinelAdded) {
+        entries.push({
+          type: 'persona', label: 'Persona Description',
+          content: null, enabled: !!enabled, role: 'system', injection_depth: 0,
+        });
+        personaSentinelAdded = true;
       }
       continue;
     }
