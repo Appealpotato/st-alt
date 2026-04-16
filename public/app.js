@@ -135,6 +135,15 @@ document.querySelectorAll('.panel-tab[data-tab]').forEach(btn => {
 // Wire panel close button
 document.getElementById('panel-close').addEventListener('click', closePanel);
 
+// Tap outside the panel → close. We listen on #chat-area (which sits behind
+// the panel) rather than the backdrop, so scroll events still pass through
+// normally. Only fires when the click target is NOT inside the panel itself.
+document.getElementById('chat-area')?.addEventListener('click', (e) => {
+  if (!panelOpen) return;
+  if (e.target.closest('#right-panel') || e.target.closest('#panel-wrapper')) return;
+  closePanel();
+});
+
 
 // Replace data-lucide placeholders in static HTML
 createIcons({ icons: { Users, Layers, Settings2, X } });

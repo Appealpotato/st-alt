@@ -199,6 +199,7 @@ html, body {
 }
 .panel-backdrop.active {
   opacity: 1;
+  pointer-events: none;
 }
 
 /* Panel wrapper — overlay container for handle + panel */
@@ -2416,6 +2417,9 @@ body.chat-dividers #chat-messages .message-row + .message-row {
     bottom: 0;
     height: calc(100dvh - var(--nav-h));
   }
+  /* Panel fills the viewport on narrow screens — 400px is wider than most
+     phones and previously clipped off-screen or wedged itself unusably. */
+  #right-panel.open { width: 100vw; max-width: 100vw; }
 }
 
 /* ── Crop Modal ──────────────────────────────────────────────────────────── */

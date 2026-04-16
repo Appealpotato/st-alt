@@ -169,6 +169,56 @@ function renderAvatarEl(container, role, State) {
 const el = id => document.getElementById(id);
 
 let cancelStream = null;
+// Timestamp of last received token from the active stream. Used by the
+// visibilitychange listener to detect backgrounded-tab stalls.
+let lastTokenAt = 0;
+// Session ID of the currently active stream (the one that owns cancelStream).
+// Separate from State.activeSessionId so session switches during streaming
+// don't lose track of which session the stream belongs to.
+let _activeStreamSessionId = null;
+// Set to true while we're transitioning into a reconnect so the
+// visibilitychange listener doesn't trigger a second reconnect.
+let _reconnecting = false;
+// Set to true when we deliberately abort an in-flight stream in order to
+// hand it off to reconnectToStream (e.g. after a backgrounded-tab stall).
+// The stream's onDone fires with { aborted: true }; we want it to be a
+// no-op in that case — the server is still authoritative and reconnect
+// will take over.
+let _suppressStreamDone = false;
+
+/**
+ * rAF-coalesced renderer for streaming token updates.
+ *
+ * `bodyEl.innerHTML = formatMessageContent(accumulated)` is expensive
+ * (two regex passes + DOMPurify + full innerHTML reparse). Calling it per
+ * token saturates the mobile main thread and queues touch events. This
+ * helper batches updates to one per animation frame.
+ *
+ * Always call flush() on done/error so the final state is applied even if
+ * the tab is hidden (rAFs don't fire in a backgrounded tab).
+ */
+function createTokenRenderer(bodyEl, formatFn) {
+  let pending = null;
+  let frameId = 0;
+  return {
+    schedule(text) {
+      pending = text;
+      if (frameId) return;
+      frameId = requestAnimationFrame(() => {
+        frameId = 0;
+        if (pending != null) bodyEl.innerHTML = formatFn(pending);
+      });
+    },
+    flush() {
+      if (frameId) { cancelAnimationFrame(frameId); frameId = 0; }
+      if (pending != null) bodyEl.innerHTML = formatFn(pending);
+    },
+    cancel() {
+      if (frameId) { cancelAnimationFrame(frameId); frameId = 0; }
+      pending = null;
+    },
+  };
+}
 
 export async function init(State, prefetchedSettings = null) {
   // Main chat area (always visible center column)
@@ -322,6 +372,28 @@ export async function init(State, prefetchedSettings = null) {
       saveSettings({ ...State.settings, chatDisplayMode: next }).catch(() => {})
     );
   });
+
+  // When a backgrounded tab returns to the foreground, iOS Safari sometimes
+  // leaves the fetch ReadableStream suspended indefinitely. If the stream
+  // looks stalled (no tokens in >10s) and there's an active stream on the
+  // server, abort the dead reader and reconnect to replay from the buffer.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!State.isStreaming || !_activeStreamSessionId || _reconnecting) return;
+    if (Date.now() - lastTokenAt < 10000) return;
+    const sid = _activeStreamSessionId;
+    _reconnecting = true;
+    // Mute the in-flight stream's onDone so it doesn't try to re-persist
+    // a response the server has likely already saved during the background.
+    _suppressStreamDone = true;
+    try { cancelStream?.(); } catch { /* already aborted */ }
+    cancelStream = null;
+    State.isStreaming = false;
+    // Give the aborted stream a tick to finish tearing down before we
+    // start a fresh one in the same slot, then clear the suppression.
+    setTimeout(() => { _suppressStreamDone = false; }, 100);
+    reconnectToStream(sid, State).finally(() => { _reconnecting = false; });
+  });
 }
 
 export async function onShow(State) {
@@ -430,31 +502,44 @@ async function selectSession(id, State) {
 
 async function reconnectToStream(sessionId, State) {
   if (State.isStreaming) return;
+
+  // Ghost-race guard: if the server already completed and persisted the
+  // assistant response between our selectSession reload and the reconnect
+  // attempt, `/api/chat/active` may still list the session briefly (or we
+  // may race against [DONE]). Re-check: if the loaded history already ends
+  // with an assistant message, the stream is effectively finished — don't
+  // open a second reader or remove the real persisted row.
+  const tail = State.chatHistory[State.chatHistory.length - 1];
+  if (tail?.role === 'assistant' && tail.content?.trim()) {
+    // Confirm with server: is this session still streaming?
+    try {
+      const { sessions } = await getActiveStreams();
+      if (!sessions.includes(sessionId)) return;
+    } catch { return; }
+  }
+
   State.isStreaming = true;
+  _activeStreamSessionId = sessionId;
+  lastTokenAt = Date.now();
   setSendState(true, State);
 
   const charName = State.sessionCharacter?.name || 'Character';
 
-  // Remove the last assistant message from rendered history if present —
-  // the reconnect buffer replays everything from scratch, so we avoid duplication.
-  const lastMsg = State.chatHistory[State.chatHistory.length - 1];
-  const container = el('chat-messages');
-  if (lastMsg?.role === 'assistant' && container) {
-    const lastRow = container.querySelector('.message-row:last-child');
-    if (lastRow) lastRow.remove();
-  }
-
+  // Append a fresh streaming bubble. On the first token we overwrite its
+  // content and on onDone we reload from server + re-render — that re-render
+  // is the authoritative source of truth, so no preemptive row removal.
   const assistantEl = appendMessageEl('assistant', '', charName, true, null, State);
   const bodyEl = assistantEl.querySelector('.message-body');
   const typingIndicator = addTypingIndicator(bodyEl);
   scrollToBottom();
   let dotsGone = false;
   let accumulated = '';
+  const renderer = createTokenRenderer(bodyEl, formatMessageContent);
 
   const dotTimer = setTimeout(() => {
     typingIndicator.remove();
     dotsGone = true;
-    if (accumulated) bodyEl.innerHTML = formatMessageContent(accumulated);
+    if (accumulated) renderer.schedule(accumulated);
   }, 400);
 
   cancelStream = streamCompletion(
@@ -462,14 +547,17 @@ async function reconnectToStream(sessionId, State) {
     sessionId,
     (token) => {
       accumulated += token;
+      lastTokenAt = Date.now();
       if (!dotsGone) return;
-      bodyEl.innerHTML = formatMessageContent(accumulated);
+      renderer.schedule(accumulated);
     },
     async (event) => {
       clearTimeout(dotTimer);
       typingIndicator.remove();
+      renderer.flush();
       assistantEl.classList.remove('message--streaming');
       State.isStreaming = false;
+      _activeStreamSessionId = null;
       setSendState(false, State);
       cancelStream = null;
       // Always reload from server and re-render — handles both normal completion
@@ -480,17 +568,31 @@ async function reconnectToStream(sessionId, State) {
       } catch { /* keep existing chatHistory */ }
       renderMessages(State);
     },
-    (errMsg) => {
+    async (err) => {
       clearTimeout(dotTimer);
+      renderer.cancel();
       typingIndicator.remove();
-      assistantEl.classList.remove('message--streaming');
-      assistantEl.classList.add('message--error');
-      bodyEl.textContent = 'Error: ' + errMsg;
+      // If reconnect failed (e.g. stream finished on server between our
+      // activeStreams check and the GET), the server remains the source of
+      // truth — drop the bubble, reload from disk, re-render. No scary error.
+      (assistantEl.closest('.message-row') || assistantEl).remove();
       State.isStreaming = false;
+      _activeStreamSessionId = null;
       setSendState(false, State);
       cancelStream = null;
+      try {
+        const session = await getSession(sessionId);
+        State.chatHistory = session.messages;
+        renderMessages(State);
+      } catch { /* keep current view */ }
+      if (!err?.stalled) {
+        console.warn('[reconnect] failed, reloaded from disk:', err?.message);
+      }
     },
     true, // reconnect flag
+    (warn) => {
+      showToast(warn?.message || 'Server warning during stream', 'error');
+    },
   );
 }
 
@@ -637,9 +739,32 @@ function renderMsgMeta(msgEl, msg, State) {
   msgEl.appendChild(metaEl);
 }
 
+// Live-ticking generation time while a message is streaming. Renders into the
+// same `.message-meta` slot that renderMsgMeta() uses, so the final call to
+// renderMsgMeta on completion cleanly replaces it with the full metadata row.
+// Returns { stop() } — always safe to call, even if showMsgDuration is off.
+function startLiveDurationMeta(msgEl, State) {
+  if (!State?.settings?.showMsgDuration) return { stop() {} };
+  const startTime = Date.now();
+  msgEl.querySelector('.message-meta')?.remove();
+  const metaEl = document.createElement('div');
+  metaEl.className = 'message-meta';
+  metaEl.textContent = '0.0s';
+  msgEl.appendChild(metaEl);
+  const tick = () => {
+    const secs = (Date.now() - startTime) / 1000;
+    metaEl.textContent = secs < 60
+      ? `${secs.toFixed(1)}s`
+      : `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`;
+  };
+  const intervalId = setInterval(tick, 200);
+  return { stop() { clearInterval(intervalId); } };
+}
+
 // Exposed so settings tab can re-render meta after toggling display options
 window._rerenderMeta = (State) => {
   document.querySelectorAll('.message--assistant[data-history-index]').forEach(msgEl => {
+    if (msgEl.classList.contains('message--streaming')) return;
     const idx = parseInt(msgEl.dataset.historyIndex, 10);
     const msg = State.chatHistory?.[idx];
     if (msg) renderMsgMeta(msgEl, msg, State);
@@ -926,7 +1051,12 @@ function enterEditMode(msgEl, histIdx, State) {
     if (newContent !== msg.content) {
       msg.content = newContent;
       if (msg.swipes) msg.swipes[msg.swipeIndex] = newContent;
-      await replaceMessages(State.activeSessionId, State.chatHistory);
+      try {
+        await replaceMessages(State.activeSessionId, State.chatHistory);
+      } catch (err) {
+        showToast('Failed to save edit', 'error');
+        console.error('[edit] save failed:', err);
+      }
     }
     exitEditMode(msgEl, histIdx, State, msg);
   });
@@ -973,7 +1103,12 @@ async function deleteMessage(histIdx, State) {
   } else {
     State.chatHistory.splice(histIdx, 1);
   }
-  await replaceMessages(State.activeSessionId, State.chatHistory);
+  try {
+    await replaceMessages(State.activeSessionId, State.chatHistory);
+  } catch (err) {
+    showToast('Failed to save deletion', 'error');
+    console.error('[delete] save failed:', err);
+  }
   renderMessages(State);
 }
 
@@ -1000,6 +1135,7 @@ async function branchFrom(histIdx, State) {
     await selectSession(meta.id, State);
     document.dispatchEvent(new CustomEvent('sessionscreated', { detail: { session: meta } }));
   } catch (err) {
+    showToast('Failed to create branch', 'error');
     console.error('[branchFrom]', err);
   } finally {
     _branching = false;
@@ -1024,7 +1160,12 @@ async function swipeMessage(histIdx, direction, State) {
     buildActionsBar(msgEl, histIdx, State, msg);
   }
 
-  await replaceMessages(State.activeSessionId, State.chatHistory);
+  try {
+    await replaceMessages(State.activeSessionId, State.chatHistory);
+  } catch (err) {
+    showToast('Failed to save swipe selection', 'error');
+    console.error('[swipe] save failed:', err);
+  }
 }
 
 // ── Regenerate ────────────────────────────────────────────────────────────────
@@ -1049,7 +1190,12 @@ async function regenerateFrom(msgIndex, State) {
 
   // Earlier message → truncate everything from this point and re-stream
   State.chatHistory = State.chatHistory.slice(0, msgIndex);
-  await replaceMessages(State.activeSessionId, State.chatHistory);
+  try {
+    await replaceMessages(State.activeSessionId, State.chatHistory);
+  } catch (err) {
+    showToast('Failed to truncate history before regen', 'error');
+    console.error('[regenerateFrom] truncate failed:', err);
+  }
   renderMessages(State);
   await streamResponse(State);
 }
@@ -1067,6 +1213,8 @@ async function regenAsSwipe(histIdx, msgEl, State) {
   const _streamTitle = State.sessions?.find(s => s.id === _streamSessionId)?.title || 'Chat';
   scrollMessageIntoView(msgEl);
   State.isStreaming = true;
+  _activeStreamSessionId = _streamSessionId;
+  lastTokenAt = Date.now();
   setSendState(true, State);
 
   const personaName = State.sessionPersona?.name || 'User';
@@ -1083,6 +1231,8 @@ async function regenAsSwipe(histIdx, msgEl, State) {
   msgEl.closest('.message-row')?.querySelector('.message-actions')?.remove();
   bodyEl.textContent = '';
   const typingIndicator = addTypingIndicator(bodyEl);
+  const renderer = createTokenRenderer(bodyEl, formatMessageContent);
+  const liveDur = startLiveDurationMeta(msgEl, State);
 
   // Force paint so dots are visible before stream starts
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -1106,11 +1256,13 @@ async function regenAsSwipe(histIdx, msgEl, State) {
 
   function handleSwipeToken(token) {
     accumulated += token;
+    lastTokenAt = Date.now();
     if (!dotsGone) return;
 
     if (!inThinkBlock && !thinkDone && /<think/i.test(accumulated)) {
       inThinkBlock = true;
       thinkStartTime = Date.now();
+      renderer.cancel();
       bodyEl.innerHTML = '';
       thinkDetailsEl = document.createElement('details');
       thinkDetailsEl.open = true;
@@ -1148,7 +1300,7 @@ async function regenAsSwipe(histIdx, msgEl, State) {
       hadContent = true;
       if (thinkDetailsEl) thinkDetailsEl.removeAttribute('open');
     }
-    bodyEl.innerHTML = formatMessageContent(accumulated);
+    renderer.schedule(accumulated);
   }
 
   cancelStream = streamCompletion(
@@ -1159,13 +1311,54 @@ async function regenAsSwipe(histIdx, msgEl, State) {
       clearTimeout(dotTimer);
       typingIndicator.remove();
       clearInterval(thinkTimerId);
+      renderer.flush();
+      liveDur.stop();
       msgEl.classList.remove('message--streaming');
-      bodyEl.innerHTML = formatMessageContent(accumulated);
 
+      // Handoff-to-reconnect path: visibilitychange aborted us to reconnect.
+      // Restore prior swipe content, reset streaming state, and let
+      // reconnectToStream take over. Skip swipe-push / save.
+      if (_suppressStreamDone && event.aborted) {
+        msg.content = msg.swipes[msg.swipeIndex];
+        bodyEl.innerHTML = formatMessageContent(msg.content);
+        buildActionsBar(msgEl, histIdx, State, msg);
+        renderMsgMeta(msgEl, msg, State);
+        State.isStreaming = false;
+        _activeStreamSessionId = null;
+        setSendState(false, State);
+        cancelStream = null;
+        return;
+      }
+
+      // Session-switch path: operate on the streaming session's on-disk
+      // history rather than State.chatHistory (which points to the current
+      // session's messages after selectSession).
       if (State.activeSessionId !== _streamSessionId) {
         showToast(`Response completed in "${_streamTitle}"`, 'info', {
           action: { label: 'View', onClick: () => selectSession(_streamSessionId, State) },
         });
+        if (accumulated.trim()) {
+          try {
+            const session = await getSession(_streamSessionId);
+            const target = session.messages?.[histIdx];
+            if (target) {
+              if (!target.swipes) { target.swipes = [target.content]; target.swipeIndex = 0; }
+              target.swipes.push(accumulated);
+              target.swipeIndex = target.swipes.length - 1;
+              target.content = accumulated;
+              target.metadata = { ...(target.metadata ?? {}), usage: event.usage ?? {}, duration: event.duration ?? 0 };
+              await replaceMessages(_streamSessionId, session.messages);
+            }
+          } catch (err) {
+            showToast('Failed to save regenerated swipe', 'error');
+            console.error('[regenAsSwipe] cross-session save failed:', err);
+          }
+        }
+        State.isStreaming = false;
+        _activeStreamSessionId = null;
+        setSendState(false, State);
+        cancelStream = null;
+        return;
       }
 
       if (accumulated.trim()) {
@@ -1185,6 +1378,7 @@ async function regenAsSwipe(histIdx, msgEl, State) {
       renderMsgMeta(msgEl, msg, State);
 
       State.isStreaming = false;
+      _activeStreamSessionId = null;
       setSendState(false, State);
       cancelStream = null;
 
@@ -1192,26 +1386,56 @@ async function regenAsSwipe(histIdx, msgEl, State) {
         try {
           await replaceMessages(_streamSessionId, State.chatHistory);
         } catch (err) {
+          showToast('Failed to save regenerated swipe', 'error');
           console.error('[regenAsSwipe] save failed:', err);
         }
       }
     },
-    (errMsg) => {
+    (err) => {
       clearTimeout(dotTimer);
+      renderer.cancel();
       typingIndicator.remove();
+      clearInterval(thinkTimerId);
+      liveDur.stop();
+
+      // Stalled stream → silently reconnect, same approach as streamResponse.
+      if (err?.stalled) {
+        msgEl.classList.remove('message--streaming');
+        // Restore prior swipe content while waiting for reconnect.
+        msg.content = msg.swipes[msg.swipeIndex];
+        bodyEl.innerHTML = formatMessageContent(msg.content);
+        buildActionsBar(msgEl, histIdx, State, msg);
+        renderMsgMeta(msgEl, msg, State);
+        State.isStreaming = false;
+        cancelStream = null;
+        const sid = _streamSessionId;
+        _activeStreamSessionId = null;
+        if (State.activeSessionId === sid) {
+          reconnectToStream(sid, State);
+        }
+        return;
+      }
+
       msgEl.classList.remove('message--streaming');
       msgEl.classList.add('message--error');
+      msgEl.querySelector('.message-meta')?.remove();
       State.isStreaming = false;
+      _activeStreamSessionId = null;
       setSendState(false, State);
       cancelStream = null;
       msg.content = msg.swipes[msg.swipeIndex];
-      bodyEl.textContent = 'Error: ' + errMsg;
-      console.error('[regenAsSwipe]', errMsg);
+      bodyEl.textContent = 'Error: ' + (err?.message ?? 'regen failed');
+      console.error('[regenAsSwipe]', err);
       setTimeout(() => {
         msgEl.classList.remove('message--error');
         bodyEl.innerHTML = formatMessageContent(msg.content);
         buildActionsBar(msgEl, histIdx, State, msg);
+        renderMsgMeta(msgEl, msg, State);
       }, 3000);
+    },
+    false,
+    (warn) => {
+      showToast(warn?.message || 'Server warning during stream', 'error');
     },
   );
 }
@@ -1234,7 +1458,12 @@ async function sendMessage(State) {
   const msgIdx = State.chatHistory.length;
   State.chatHistory.push(userMsg);
   appendMessageEl('user', text, null, false, msgIdx, State);
-  await appendMessage(State.activeSessionId, userMsg);
+  try {
+    await appendMessage(State.activeSessionId, userMsg);
+  } catch (err) {
+    showToast('Failed to save message — may be lost on reload', 'error');
+    console.error('[sendMessage] persist failed:', err);
+  }
 
   await streamResponse(State);
 }
@@ -1253,6 +1482,8 @@ async function streamResponse(State) {
   const _streamSessionId = State.activeSessionId;
   const _streamTitle = State.sessions?.find(s => s.id === _streamSessionId)?.title || 'Chat';
   State.isStreaming = true;
+  _activeStreamSessionId = _streamSessionId;
+  lastTokenAt = Date.now();
   setSendState(true, State);
 
   const personaName = State.sessionPersona?.name || 'User';
@@ -1278,6 +1509,7 @@ async function streamResponse(State) {
   const bodyEl = assistantEl.querySelector('.message-body');
   const typingIndicator = addTypingIndicator(bodyEl);
   scrollToBottom();
+  const liveDur = startLiveDurationMeta(assistantEl, State);
 
   // Force a browser paint so the typing dots are visible before the stream starts
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -1292,6 +1524,7 @@ async function streamResponse(State) {
   let thinkDetailsEl  = null;
   let thinkSummaryEl  = null;
   let thinkContentEl  = null;
+  const renderer = createTokenRenderer(bodyEl, formatMessageContent);
 
   const dotTimer = setTimeout(() => {
     typingIndicator.remove();
@@ -1301,11 +1534,15 @@ async function streamResponse(State) {
 
   function handleToken(token) {
       accumulated += token;
+      lastTokenAt = Date.now();
       if (!dotsGone) return;
 
       if (!inThinkBlock && !thinkDone && /<think/i.test(accumulated)) {
         inThinkBlock = true;
         thinkStartTime = Date.now();
+        // Cancel any pending bodyEl.innerHTML flush so it doesn't wipe the
+        // think-block DOM we're about to construct.
+        renderer.cancel();
         bodyEl.innerHTML = '';
         thinkDetailsEl = document.createElement('details');
         thinkDetailsEl.open = true;
@@ -1343,7 +1580,7 @@ async function streamResponse(State) {
         hadContent = true;
         if (thinkDetailsEl) thinkDetailsEl.removeAttribute('open');
       }
-      bodyEl.innerHTML = formatMessageContent(accumulated);
+      renderer.schedule(accumulated);
   }
 
   cancelStream = streamCompletion(
@@ -1355,13 +1592,32 @@ async function streamResponse(State) {
       clearTimeout(dotTimer);
       typingIndicator.remove();
       clearInterval(thinkTimerId);
-      assistantEl.classList.remove('message--streaming');
-      bodyEl.innerHTML = formatMessageContent(accumulated); // final render with collapsed think block
+      renderer.flush(); // final render with collapsed think block
+      liveDur.stop();
 
+      // Handoff-to-reconnect path: visibilitychange aborted us to reconnect.
+      // Drop the bubble and exit — reconnectToStream owns the UI now.
+      if (_suppressStreamDone && event.aborted) {
+        (assistantEl.closest('.message-row') || assistantEl).remove();
+        return;
+      }
+
+      assistantEl.classList.remove('message--streaming');
+
+      // Session-switch path: the user switched away while this stream was
+      // running. The server already persisted via [DONE], so don't mutate
+      // State.chatHistory (points to a different session now) or touch the
+      // live DOM. Just toast and bail — the message is on disk.
       if (State.activeSessionId !== _streamSessionId) {
+        (assistantEl.closest('.message-row') || assistantEl).remove();
         showToast(`Response completed in "${_streamTitle}"`, 'info', {
           action: { label: 'View', onClick: () => selectSession(_streamSessionId, State) },
         });
+        State.isStreaming = false;
+        _activeStreamSessionId = null;
+        setSendState(false, State);
+        cancelStream = null;
+        return;
       }
 
       if (accumulated.trim()) {
@@ -1380,34 +1636,65 @@ async function streamResponse(State) {
         renderMsgMeta(assistantEl, histMsg, State);
 
         State.isStreaming = false;
+        _activeStreamSessionId = null;
         setSendState(false, State);
         cancelStream = null;
 
         // On normal completion the server persists via streamProxy [DONE].
         // On abort, the server never got [DONE], so persist client-side.
         if (event.aborted) {
-          await appendMessage(State.activeSessionId, histMsg).catch(() => {});
+          try {
+            await appendMessage(_streamSessionId, histMsg);
+          } catch (err) {
+            showToast('Failed to save response — may not persist across reload', 'error');
+            console.error('[streamResponse] abort persist failed:', err);
+          }
         }
       } else if (event.aborted) {
         // No content arrived — remove the empty bubble
         (assistantEl.closest('.message-row') || assistantEl).remove();
         State.isStreaming = false;
+        _activeStreamSessionId = null;
         setSendState(false, State);
         cancelStream = null;
       } else {
         State.isStreaming = false;
+        _activeStreamSessionId = null;
         setSendState(false, State);
         cancelStream = null;
       }
     },
     // onError
-    (errMsg) => {
+    (err) => {
       clearTimeout(dotTimer);
+      renderer.cancel();
       typingIndicator.remove();
+      clearInterval(thinkTimerId);
+      liveDur.stop();
+
+      // Stalled stream → silently reconnect to the server's buffer.
+      // The server keeps streaming; we just lost the reader.
+      if (err?.stalled) {
+        (assistantEl.closest('.message-row') || assistantEl).remove();
+        State.isStreaming = false;
+        cancelStream = null;
+        const sid = _streamSessionId;
+        _activeStreamSessionId = null;
+        // Only reconnect if the user is still on the same session — otherwise
+        // the server will finish and persist on its own, and the user will see
+        // the completion toast via the visibilitychange path on return.
+        if (State.activeSessionId === sid) {
+          reconnectToStream(sid, State);
+        }
+        return;
+      }
+
       assistantEl.classList.remove('message--streaming');
       assistantEl.classList.add('message--error');
-      bodyEl.textContent = 'Error: ' + errMsg; // plain text for errors
+      assistantEl.querySelector('.message-meta')?.remove();
+      bodyEl.textContent = 'Error: ' + (err?.message ?? 'stream failed'); // plain text for errors
       State.isStreaming = false;
+      _activeStreamSessionId = null;
       setSendState(false, State);
       cancelStream = null;
       // Push a placeholder so the action bar (regen/delete) works on the error bubble
@@ -1416,6 +1703,10 @@ async function streamResponse(State) {
       State.chatHistory.push(histMsg);
       assistantEl.dataset.historyIndex = histIdx;
       buildActionsBar(assistantEl, histIdx, State, histMsg);
+    },
+    false,
+    (warn) => {
+      showToast(warn?.message || 'Server warning during stream', 'error');
     },
   );
 }
